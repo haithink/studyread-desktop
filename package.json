@@ -1,0 +1,13 @@
+{
+  "name": "studyread-desktop-assets",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline PDF renderer and math/chat assets for StudyRead",
+  "scripts": {"vendor": "node tools/vendor.mjs"},
+  "dependencies": {
+    "pdfjs-dist": "6.5.438",
+    "katex": "0.19.1",
+    "marked": "18.1.3",
+    "dompurify": "3.4.17"
+  }
+}

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>理读 · StudyRead</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/pdfjs/web/pdf_viewer.css"><link rel="stylesheet" href="vendor/katex.min.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/marked.js" defer></script><script src="vendor/purify.min.js" defer></script>
+  <script src="vendor/katex.min.js" defer></script><script type="module" src="app.js"></script>
+</head>
+<body>
+  <section id="library" class="screen">
+    <aside class="library-nav">
+      <div class="brand"><img src="icon.svg" alt=""><span>理读<small>STUDYREAD</small></span></div>
+      <div class="nav-caption">我的学习空间</div>
+      <button class="nav-item active" data-category="all">▦ <span>全部书籍</span><b id="all-count">0</b></button>
+      <button class="nav-item" data-category="physics">⤴ <span>物理</span><b id="physics-count">0</b></button>
+      <button class="nav-item" data-category="math">∑ <span>数学</span><b id="math-count">0</b></button>
+      <button class="nav-item" data-category="other">▤ <span>其他</span><b id="other-count">0</b></button>
+      <div class="nav-bottom"><p>读懂推导，<br>留住每一次思考。</p><button class="nav-item settings-open">⚙ <span>模型与设置</span></button><small id="version"></small></div>
+    </aside>
+    <main class="library-main">
+      <header class="library-heading"><div><div class="eyebrow">A PLACE TO THINK</div><h1>我的书架</h1><p>从一页原文，到一个真正理解的概念。</p></div><button id="import-books" class="primary">＋ 添加 PDF 书籍</button></header>
+      <section id="recent-section" hidden><div class="section-title"><h2>继续阅读</h2><button id="recent-more" class="text-button">更多 →</button></div><div id="recent-books"></div></section>
+      <div class="shelf-controls"><h2 id="shelf-title">全部书籍</h2><div class="shelf-tools"><input id="book-search" type="search" placeholder="搜索书名或作者" aria-label="搜索书籍"><select id="book-sort" aria-label="书籍排序"><option value="recent">最近阅读</option><option value="added">最近添加</option><option value="title">书名</option></select></div></div>
+      <div id="book-grid"></div>
+      <div id="empty-library" hidden><div class="empty-mark">∫</div><h2>让一本好书，成为新的起点</h2><p>添加数学、物理或其他领域的 PDF。<br>保留原版公式与图示，遇到疑问就选中提问。</p><button class="primary" id="empty-import">添加第一本书</button></div>
+      <footer class="library-footer">原版 PDF · 章节导航 · 持续对话 · 本地学习记录</footer>
+    </main>
+  </section>
+
+  <section id="reader" class="screen" hidden>
+    <header class="reader-top"><button id="back-library" class="quiet" title="返回书库">← 书库</button><div class="reader-book"><strong id="reader-title"></strong><span id="reader-subtitle"></span></div><button class="quiet settings-open">⚙ 模型设置</button></header>
+    <div class="reader-layout">
+      <aside id="outline-pane"><div class="outline-heading"><strong>章节目录</strong><button id="hide-outline" class="icon-button" title="收起目录">‹</button></div><input id="outline-search" type="search" placeholder="查找章节" aria-label="查找章节"><div id="outline-list"></div><div class="outline-note">目录页码使用 PDF 文件页序</div></aside>
+      <main class="pdf-pane">
+        <div class="pdf-toolbar">
+          <button id="show-outline" class="icon-button" title="章节目录" hidden>☰</button>
+          <button id="prev-page" class="icon-button" title="上一页">‹</button><input id="page-number" type="number" min="1" aria-label="PDF 页码"><span id="page-total"></span><button id="next-page" class="icon-button" title="下一页">›</button>
+          <span class="toolbar-separator"></span><select id="pdf-zoom" aria-label="缩放"><option value="width">适合宽度</option><option value="page">整页</option><option value="0.75">75%</option><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option></select>
+          <button id="crop-mode" class="quiet" title="拖动框选公式或图示">▧ 框选提问</button>
+          <button id="find-toggle" class="icon-button" title="搜索正文 Ctrl+F">⌕</button>
+        </div>
+        <div id="find-bar" hidden><input id="pdf-find" type="search" placeholder="搜索 PDF 正文" aria-label="搜索 PDF 正文"><span id="find-count"></span><button id="find-prev" class="icon-button">↑</button><button id="find-next" class="icon-button">↓</button><button id="find-close" class="icon-button">×</button></div>
+        <div id="pdf-loading">正在打开 PDF…</div>
+        <div id="pdf-container" tabindex="0"><div id="pdf-viewer" class="pdfViewer"></div><div id="crop-box" hidden></div></div>
+        <button id="selection-action" class="primary" hidden>＋ 加入提问</button>
+        <footer class="pdf-status"><span id="pdf-page-label">选中文字提问，或框选公式与图示</span><span id="save-state">阅读位置自动保存</span></footer>
+      </main>
+      <div id="chat-divider" role="separator" aria-label="调整问答面板宽度"></div>
+      <aside id="chat-pane">
+        <div class="chat-heading"><div><span class="eyebrow">THINK IT THROUGH</span><h2>学习对话</h2></div><button id="new-session" class="quiet" title="新建专题会话">＋ 新会话</button></div>
+        <div class="session-controls"><select id="session-select" aria-label="学习会话"></select><button id="rename-session" class="icon-button" title="重命名会话">✎</button><button id="export-session" class="icon-button" title="导出会话与截图">⇩</button></div>
+        <div id="messages" aria-live="polite"></div>
+        <div id="chat-status"></div>
+        <form id="ask-form">
+          <div id="context-chip" hidden><div><span id="context-label"></span><button type="button" id="clear-context" class="icon-button" title="清除引用">×</button></div><p id="context-preview"></p></div>
+          <textarea id="question" placeholder="这里为什么成立？能从上一步推导出来吗？" rows="3" aria-label="向教材提问"></textarea>
+          <div class="composer-options"><label><input id="attach-page" type="checkbox">附当前页图片</label><span id="source-page"></span></div>
+          <div class="composer-bottom"><button type="button" id="model-indicator" class="model-pill settings-open">配置模型</button><button type="button" id="stop-answer" class="quiet" hidden>■ 停止</button><button type="submit" id="send-question" class="primary">发送 ↑</button></div>
+          <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 对话与引用自动保存</div>
+        </form>
+      </aside>
+    </div>
+  </section>
+
+  <dialog id="settings-dialog">
+    <div class="dialog-header"><div><div class="eyebrow">YOUR READING ASSISTANT</div><h2>模型与设置</h2></div><button class="icon-button" id="settings-close" title="关闭">×</button></div>
+    <p class="settings-intro">文字问题可使用 DeepSeek 等模型。框选公式或图示时，请选择支持图片的模型。</p>
+    <div class="settings-actions"><select id="profile-select" aria-label="模型配置"></select><button id="add-profile" class="quiet">＋ 新配置</button><button id="delete-profile" class="quiet danger">移除</button></div>
+    <div id="profile-fields">
+      <div class="field-row"><label>配置名称<input id="profile-name" placeholder="例如：DeepSeek 直连"></label><label>接口格式<select id="profile-provider"><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic 原生</option></select></label></div>
+      <label>API 地址<input id="profile-url" placeholder="https://api.deepseek.com"></label>
+      <label>API Key<input id="profile-key" type="password" autocomplete="new-password" placeholder="填写密钥"></label>
+      <label>模型名<input id="profile-model" placeholder="例如：deepseek-chat"></label>
+      <label class="check-label"><input id="profile-vision" type="checkbox">此模型支持图片（公式截图、图示、扫描文字）</label>
+    </div>
+    <div id="settings-result"></div>
+    <div class="settings-footer"><button id="import-kandu" class="quiet">从刊读导入配置</button><span></span><button id="test-model" class="quiet">保存并测试</button><button id="save-settings" class="primary">保存并使用</button></div>
+    <p class="settings-note">设置与会话保存在本机。提问时发送所选内容、当前页附近文字和最近会话；图片仅在框选或勾选附图时发送。书籍不会整本上传。<button id="open-data" class="text-button">打开数据目录</button></p>
+  </dialog>
+  <dialog id="edit-book-dialog"><div class="dialog-header"><h2>书籍信息</h2><button id="edit-close" class="icon-button">×</button></div><label>书名<input id="edit-title"></label><label>分类<select id="edit-category"><option value="physics">物理</option><option value="math">数学</option><option value="other">其他</option></select></label><div class="settings-footer"><button id="remove-book" class="quiet danger">移出书库</button><span></span><button id="save-book" class="primary">保存</button></div><p class="settings-note">移出会删除本工具的文件副本和学习会话，原始 PDF 保留。</p></dialog>
+  <input id="file-upload" type="file" accept="application/pdf,.pdf" multiple hidden>
+  <div id="toast" role="status" hidden></div>
+</body></html>

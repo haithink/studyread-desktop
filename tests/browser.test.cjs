@@ -1,0 +1,100 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {spawn}=require('node:child_process');
+const {mkdtemp,readFile,writeFile,mkdir,rm}=require('node:fs/promises');
+const path=require('node:path');
+const {tmpdir}=require('node:os');
+const root=path.resolve(__dirname,'..');
+const firstPage=process.env.STUDYREAD_SAMPLE_PDF?24:2;
+const secondPage=process.env.STUDYREAD_SAMPLE_PDF?25:4;
+const chrome=process.env.CHROME_PATH||path.resolve(root,'../chrome-win64/chrome.exe');
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+async function until(fn,label,seconds=25){const deadline=Date.now()+seconds*1000;while(Date.now()<deadline){const result=await fn();if(result)return result;await pause(100);}throw new Error('Timed out: '+label);}
+async function connect(url){
+ const ws=new WebSocket(url);await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});
+ let sequence=0;const pending=new Map();const errors=[];
+ ws.addEventListener('message',({data})=>{const message=JSON.parse(data);if(message.method==='Runtime.exceptionThrown')errors.push(message.params.exceptionDetails.exception?.description||message.params.exceptionDetails.text);const p=pending.get(message.id);if(!p)return;pending.delete(message.id);clearTimeout(p.timer);message.error?p.reject(new Error(message.error.message)):p.resolve(message.result);});
+ const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{pending.delete(id);reject(new Error('CDP timeout: '+method));},30000);pending.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});
+ return {send,errors,close:()=>ws.close(),evaluate:async(expression)=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw new Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result.value;}};
+}
+test('real PDF reading, quoted chat, math, history, crop, persistence and narrow layout',{timeout:150000},async t=>{
+ const profile=await mkdtemp(path.join(tmpdir(),'studyread-chrome-'));
+ const backend=spawn(path.join(root,'.venv/Scripts/python.exe'),['-u','-X','utf8','tests/browser_server.py'],{cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe']});
+ let output='',backendError='';backend.stdout.on('data',d=>output+=d);backend.stderr.on('data',d=>backendError+=d);
+ const info=await until(()=>{try{return JSON.parse(output.trim().split('\n')[0]);}catch{return null;}},'backend: '+backendError);
+ const child=spawn(chrome,['--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:'ignore'});
+ let page;
+ t.after(async()=>{page?.close();child.kill();backend.kill();await pause(500);await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100});await rm(info.data,{recursive:true,force:true,maxRetries:10,retryDelay:100});});
+ const port=await until(async()=>{try{return (await readFile(path.join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];}catch{return null;}},'Chrome launch');
+ const targets=await fetch(`http://127.0.0.1:${port}/json/list`).then(r=>r.json());
+ page=await connect(targets.find(t=>t.type==='page').webSocketDebuggerUrl);
+ await page.send('Runtime.enable');await page.send('Page.enable');
+ await page.send('Emulation.setDeviceMetricsOverride',{width:1440,height:940,deviceScaleFactor:1,mobile:false});
+ await page.send('Page.navigate',{url:info.url});
+ try{
+  await until(()=>page.evaluate("!!window.studyread && document.querySelectorAll('.book-card').length===1"),'library boot',30);
+  await page.evaluate(`window.studyread.openBook(${JSON.stringify(info.book)})`);
+  await until(()=>page.evaluate("!!document.querySelector('.page canvas')"),'PDF canvas and selectable text');
+  assert.ok(await page.evaluate("window.studyread.state.book.pages>=8"));
+  await page.evaluate(`document.getElementById('page-number').value=${firstPage};document.getElementById('page-number').dispatchEvent(new Event('change'))`);
+  await until(()=>page.evaluate(`window.studyread.viewer.currentPageNumber===${firstPage}`),'page jump');
+  await until(()=>page.evaluate(`document.querySelector('.page[data-page-number="${firstPage}"] .textLayer')?.textContent.length>20`),'page 2 text');
+  const fitsWidth=()=>page.evaluate("(()=>{const v=window.studyread.viewer,p=v.getPageView(v.currentPageNumber-1);const w=document.getElementById('pdf-container').clientWidth;return !!p?.pdfPage&&p.div.offsetWidth<=w&&p.div.offsetWidth>w-65})()");
+  await until(fitsWidth,'mixed-size body page fits width');
+  await page.evaluate("window.studyread.viewer.currentPageNumber=1");
+  await until(fitsWidth,'smaller cover fits width');
+  await page.evaluate(`window.studyread.viewer.currentPageNumber=${firstPage}`);
+  await until(fitsWidth,'return to body fits width');
+  // Select actual PDF text, then click the contextual ask button.
+  await page.evaluate(`(()=>{const span=document.querySelector('.page[data-page-number="${firstPage}"] .textLayer span');const range=document.createRange();range.selectNodeContents(span);const s=getSelection();s.removeAllRanges();s.addRange(range);document.getElementById('pdf-container').dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:600,clientY:250}));document.getElementById('selection-action').click();})()`);
+  assert.equal(await page.evaluate('window.studyread.state.selected.page'),firstPage);
+  await page.evaluate("document.getElementById('question').value='Please explain the selected paragraph.';document.getElementById('ask-form').requestSubmit()");
+  await until(()=>page.evaluate("window.studyread.state.messageRows.length===2&&!document.getElementById('stop-answer').hidden"),'streaming visible');
+  await until(()=>page.evaluate("window.studyread.state.messageRows.at(-1)?.status==='complete'"),'first response');
+  assert.ok(await page.evaluate("document.querySelectorAll('.katex').length>=2"));
+  assert.equal(await page.evaluate("window.studyread.state.messageRows[0].context.page"),firstPage);
+  await page.evaluate("document.getElementById('question').value='How does this relate to the previous result?';document.getElementById('ask-form').requestSubmit()");
+  await until(()=>page.evaluate("window.studyread.state.messageRows.length===4&&window.studyread.state.messageRows.at(-1).status==='complete'"),'follow-up');
+  assert.ok(await page.evaluate("window.studyread.state.messageRows.at(-1).content.includes('3 条消息')"));
+  // No untrusted HTML executes and LaTeX survives Markdown parsing.
+  assert.equal(await page.evaluate("(()=>{const f=window.studyread.mathMarkdown('<img src=x onerror=alert(1)> **proof** $$\\\\frac{1}{2}mv^2$$');return f.querySelectorAll('img').length})()"),0);
+  await page.evaluate(`document.getElementById('page-number').value=${secondPage};document.getElementById('page-number').dispatchEvent(new Event('change'))`);
+  await until(fitsWidth,'next body page fits width');
+  await page.evaluate("(()=>{const v=window.studyread.viewer,p=v.getPageView(v.currentPageNumber-1),c=document.getElementById('pdf-container');c.scrollTop+=p.div.getBoundingClientRect().top-c.getBoundingClientRect().top+p.div.offsetHeight*.18})()");
+  await pause(1200);
+  await page.evaluate("document.getElementById('back-library').click()");
+  await until(()=>page.evaluate("!document.getElementById('library').hidden"),'back library');
+  assert.equal(await page.evaluate("document.querySelectorAll('.recent-card').length"),1);
+  await page.evaluate(`window.studyread.openBook(${JSON.stringify(info.book)})`);
+  assert.equal(await page.evaluate('window.studyread.viewer.currentPageNumber'),secondPage);
+  assert.equal(await page.evaluate('window.studyread.state.messageRows.length'),4);
+  await until(fitsWidth,'restored body page fits width');
+  assert.ok(await page.evaluate("(()=>{const v=window.studyread.viewer,p=v.getPageView(v.currentPageNumber-1),c=document.getElementById('pdf-container');return Math.abs((c.getBoundingClientRect().top-p.div.getBoundingClientRect().top)/p.div.offsetHeight-.18)<.025})()"),'saved within-page reading position restored');
+  // Real pointer crop on a PDF canvas, not an API-only imitation.
+  const bounds=await page.evaluate(`(()=>{const r=document.querySelector('.page[data-page-number="${secondPage}"]').getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}})()`);
+  await page.evaluate("document.getElementById('crop-mode').click()");
+  const x=bounds.x+bounds.width*.15,y=Math.max(110,bounds.y+bounds.height*.2);
+  await page.send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',clickCount:1});
+  await page.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:x+160,y:y+100,button:'left',buttons:1});
+  await page.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:x+160,y:y+100,button:'left',clickCount:1});
+  assert.ok(await page.evaluate('Array.isArray(window.studyread.state.selected?.rect)'));
+  await page.evaluate("document.getElementById('question').value='Explain this formula image.';document.getElementById('ask-form').requestSubmit()");
+  await until(()=>page.evaluate("window.studyread.state.messageRows.length===6&&window.studyread.state.messageRows.at(-1).status==='complete'"),'image reply');
+  assert.ok(await page.evaluate("window.studyread.state.messageRows.at(-2).context.image?.endsWith('.png')"));
+  await page.evaluate("document.getElementById('new-session').click()");
+  await until(()=>page.evaluate('window.studyread.state.messageRows.length===0'),'new session');
+  assert.equal(await page.evaluate('window.studyread.state.book.sessions.length'),2);
+  await page.evaluate("document.getElementById('session-select').value=window.studyread.state.book.sessions.find(s=>s.id!==window.studyread.state.session).id;document.getElementById('session-select').dispatchEvent(new Event('change'))");
+  await until(()=>page.evaluate('window.studyread.state.messageRows.length===6'),'session restore');
+  await page.send('Emulation.setDeviceMetricsOverride',{width:1050,height:720,deviceScaleFactor:1,mobile:false});
+  await pause(500);
+  assert.ok(await page.evaluate("document.getElementById('pdf-container').clientWidth>350&&document.getElementById('chat-pane').clientWidth>=310"));
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth>innerWidth'),false);
+  await until(fitsWidth,'PDF fits resized reading pane');
+  const out=path.join(root,'_test_artifacts');await mkdir(out,{recursive:true});
+  await page.send('Emulation.setDeviceMetricsOverride',{width:1440,height:940,deviceScaleFactor:1,mobile:false});
+  await pause(500);const screenshot=await page.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+  await writeFile(path.join(out,'browser-reader.png'),Buffer.from(screenshot.data,'base64'));
+  assert.deepEqual(page.errors,[]);
+ }catch(error){console.error('Browser state:',await page.evaluate("({toast:document.getElementById('toast')?.textContent,loading:document.getElementById('pdf-loading')?.textContent,errors:window.studyread?.state.messageRows})"));console.error('Browser errors:',page.errors);throw error;}
+});

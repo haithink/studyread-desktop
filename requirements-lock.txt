@@ -1,0 +1,21 @@
+# Python 3.11 / Windows x64; app and build dependencies
+altgraph==0.17.5
+bottle==0.13.4
+certifi==2026.10.23
+cffi==2.1.1
+charset-normalizer==3.5.2
+clr_loader==0.3.1
+idna==3.20
+packaging==26.3
+pefile==2024.8.26
+proxy_tools==0.1.0
+pycparser==3.12
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+PyMuPDF==1.24.14
+pythonnet==3.2.1
+pywebview==6.2.1
+pywin32-ctypes==0.2.3
+requests==2.34.2
+typing_extensions==4.16.0
+urllib3==2.8.0

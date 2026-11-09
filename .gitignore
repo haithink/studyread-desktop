@@ -1,0 +1,17 @@
+.venv/
+node_modules/
+build/
+dist/
+*.spec
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+ver.txt
+_test_artifacts/
+*.pdf
+.env
+settings.json
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

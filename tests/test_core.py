@@ -10,7 +10,7 @@ import pymupdf
 import pytest
 import requests
 
-from studyread import config, context, llm, store
+from studyread import config, context, llm, store, attachments
 from studyread.chat import ChatService
 from studyread.server import ApplicationServer, export_zip
 
@@ -159,6 +159,75 @@ def test_both_provider_image_payloads(textbook, model):
     anthropic = llm.payload(dict(model, provider='anthropic'), 'teacher', messages)
     assert anthropic['system'] == 'teacher'
     assert anthropic['messages'][0]['content'][0]['source']['media_type'] == 'image/png'
+
+
+def clipboard_png(textbook):
+    with pymupdf.open(store.book_path(textbook['id'])) as doc:
+        raw = doc[1].get_pixmap(matrix=pymupdf.Matrix(.5, .5)).tobytes('png')
+    return 'data:image/png;base64,' + base64.b64encode(raw).decode('ascii')
+
+
+@pytest.mark.parametrize('provider', ['openai', 'anthropic'])
+def test_pasted_images_chat_retry_export_and_cleanup(textbook, model, monkeypatch, provider):
+    seen = []
+    def fake(profile, system, messages, delta, cancel, responses):
+        seen.append(llm.payload(dict(profile, provider=provider), system, messages))
+        if len(seen) == 1:
+            raise llm.ModelError('Temporary test failure')
+        delta('图片中的公式是 $$F=ma$$。')
+    monkeypatch.setattr(llm, 'stream', fake)
+    sid = textbook['current_session']
+    chat = ChatService()
+    job = chat.ask(sid, '', 2, attach_image=True, images=[clipboard_png(textbook)] * 2)
+    until(lambda: chat.get(job['id'])['status'] == 'error')
+    rows = store.messages(sid)
+    assert rows[0]['content'].startswith('请解释图片')
+    names = attachments.image_names(rows[0]['context'])
+    assert len(names) == 3
+    blocks = seen[0]['messages'][-1]['content']
+    assert len(blocks) == 4
+    assert sum(b['type'] == ('image' if provider == 'anthropic' else 'image_url') for b in blocks) == 3
+    again = chat.retry(sid, job['messageId'])
+    until(lambda: chat.get(again['id'])['status'] == 'complete')
+    assert len(store.messages(sid)) == 2 and seen[1]['messages'][-1]['content'] == blocks
+    with zipfile.ZipFile(io.BytesIO(export_zip(sid))) as archive:
+        for name in names:
+            assert archive.read('attachments/' + name).startswith(b'\x89PNG')
+            assert name in archive.read('conversation.md').decode()
+    followup = chat.ask(sid, '图片中的第二个符号是什么意思？', 3)
+    until(lambda: chat.get(followup['id'])['status'] == 'complete')
+    assert len(seen[-1]['messages'][-3]['content']) == 4
+    assert isinstance(seen[-1]['messages'][-1]['content'], str)
+    # A new service instance still sees the saved image references and answer.
+    assert len(attachments.image_names(store.messages(sid)[0]['context'])) == 3
+    store.remove_book(textbook['id'])
+    assert all(not (config.data_dir() / 'attachments' / name).exists() for name in names)
+
+
+def test_invalid_pasted_images_leave_no_question_or_files(textbook, model):
+    good = clipboard_png(textbook)
+    bad = 'data:image/png;base64,' + base64.b64encode(b'not a PNG').decode()
+    for values in ([good, bad], [good] * 5, ['file:///private.png'], 'not a list'):
+        with pytest.raises(ValueError):
+            ChatService().ask(textbook['current_session'], 'Explain', 2, images=values)
+    assert not store.messages(textbook['current_session'])
+    assert not list((config.data_dir() / 'attachments').iterdir())
+
+
+def test_text_model_rejects_pasted_image_and_image_retry(textbook, model, monkeypatch):
+    monkeypatch.setattr(llm, 'stream', lambda *args: (_ for _ in ()).throw(llm.ModelError('Failure')))
+    chat = ChatService()
+    sid = textbook['current_session']
+    job = chat.ask(sid, 'Explain', 2, images=[clipboard_png(textbook)])
+    until(lambda: chat.get(job['id'])['status'] == 'error')
+    settings = config.settings()
+    settings['profiles'][0]['vision'] = False
+    config.save_settings(settings)
+    with pytest.raises(ValueError, match='图片'):
+        chat.retry(sid, job['messageId'])
+    with pytest.raises(ValueError, match='图片'):
+        chat.ask(sid, 'Another image', 2, images=[clipboard_png(textbook)])
+    assert len(store.messages(sid)) == 2
 
 
 def test_export_contains_saved_quotes_latex_and_images(textbook):

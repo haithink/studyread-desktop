@@ -137,10 +137,12 @@ def update_book(book_id, title, category):
 
 
 def remove_book(book_id):
+    from .attachments import image_names
     book(book_id)
     with connection() as db:
-        attachments = [json.loads(r[0]).get('image') for r in db.execute('''SELECT context FROM messages m
-                      JOIN sessions s ON s.id=m.session_id WHERE s.book_id=?''', (book_id,))]
+        attachments = [name for r in db.execute('''SELECT context FROM messages m
+                      JOIN sessions s ON s.id=m.session_id WHERE s.book_id=?''', (book_id,))
+                       for name in image_names(json.loads(r[0]))]
         db.execute('DELETE FROM books WHERE id=?', (book_id,))
     for image in attachments:
         if image and Path(image).name == image:
@@ -213,6 +215,7 @@ def update_message(message_id, content, status='streaming', error=''):
 
 
 def export_session(session_id):
+    from .attachments import image_names
     s = session(session_id)
     b = book(s['book_id'])
     lines = [f"# {b['title']} · {s['title']}", '']
@@ -223,8 +226,8 @@ def export_session(session_id):
             lines += [f"来源：PDF 第 {c['page']} 页", '']
         if c.get('selection'):
             lines += ['> ' + c['selection'].replace('\n', '\n> '), '']
-        if c.get('image'):
-            lines += [f"![所选区域](attachments/{c['image']})", '']
+        for name in image_names(c):
+            lines += [f"![提问图片](attachments/{name})", '']
         lines += [m['content'], '']
         if m['status'] != 'complete':
             lines += [f"（{m.get('error') or m['status']}）", '']

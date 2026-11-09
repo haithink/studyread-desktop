@@ -56,10 +56,11 @@
         <div id="chat-status"></div>
         <form id="ask-form">
           <div id="context-chip" hidden><div><span id="context-label"></span><button type="button" id="clear-context" class="icon-button" title="清除引用">×</button></div><p id="context-preview"></p></div>
-          <textarea id="question" placeholder="这里为什么成立？能从上一步推导出来吗？" rows="3" aria-label="向教材提问"></textarea>
-          <div class="composer-options"><label><input id="attach-page" type="checkbox">附当前页图片</label><span id="source-page"></span></div>
+          <div id="pasted-images" aria-label="待发送的图片" hidden></div>
+          <textarea id="question" placeholder="这里为什么成立？也可 Ctrl+V 粘贴截图后提问。" rows="3" aria-label="向教材提问"></textarea>
+          <div class="composer-options"><label title="将右侧标注的引用页整页截图一起发给模型，以便识别公式和图示；框选时只发送所选区域。需要支持图片的模型。"><input id="attach-page" type="checkbox">附引用页整页截图</label><span id="source-page"></span></div>
           <div class="composer-bottom"><button type="button" id="model-indicator" class="model-pill settings-open">配置模型</button><button type="button" id="stop-answer" class="quiet" hidden>■ 停止</button><button type="submit" id="send-question" class="primary">发送 ↑</button></div>
-          <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 对话与引用自动保存</div>
+          <div class="composer-hint">Ctrl+V 粘贴图片 · Enter 发送 · Shift+Enter 换行</div>
         </form>
       </aside>
     </div>

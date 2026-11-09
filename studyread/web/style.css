@@ -6,3 +6,9 @@ dialog{border:1px solid #d9e2d4;border-radius:13px;max-width:620px;width:90vw;pa
 @media(max-width:1200px){:root{--outline-width:185px;--chat-width:360px}.library-nav{width:185px}.library-main{padding:35px 28px}.pdf-toolbar{gap:1px}.toolbar-separator{margin:0 3px}.pdf-toolbar .quiet{font-size:10px;padding:5px}.chat-heading{padding:16px}.message.assistant .message-body{font-size:12px}#messages{padding:17px 15px}.reader-top{gap:12px}}@media(max-width:1050px){#outline-pane{display:none}#show-outline{display:inline-block!important}.library-nav{width:170px}.shelf-tools input{width:160px}#chat-pane{min-width:310px}.pdf-toolbar select{max-width:95px}}
 
 .pdf-status{position:absolute;bottom:0;left:0;right:0}
+#pasted-images{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-height:180px;overflow:auto;margin-bottom:9px;padding:3px 2px}
+.pasted-image{position:relative;flex:0 0 66px;height:62px;border:1px solid #cad9c4;border-radius:7px;background:#fff}
+.pasted-image img{width:100%;height:100%;object-fit:contain;border-radius:6px}
+.remove-image{position:absolute;right:-5px;top:-5px;width:20px;height:20px;padding:0;border-radius:50%;background:#3b6358;color:#fff;font-size:15px;line-height:20px;box-shadow:0 1px 4px #0002}
+.remove-image:hover{background:#9b5b48}
+.pasted-hint{font-size:9px;color:#7a8e77}

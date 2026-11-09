@@ -112,7 +112,7 @@ function scheduleFit(){
   });
 }
 new ResizeObserver(scheduleFit).observe($('pdf-container'));
-function updateSource(){const page=state.selected?.page||currentPage();$('source-page').textContent=`引用 PDF 第 ${page} 页`;$('attach-page').disabled=!!state.selected?.rect;}
+function updateSource(){const page=state.selected?.page||currentPage();$('source-page').textContent=`引用 PDF 第 ${page} 页`;$('attach-page').disabled=!!state.selected?.rect;if(state.selected?.rect)$('attach-page').checked=false;}
 eventBus.on('pagechanging',({pageNumber,pageLabel})=>{
   $('page-number').value=pageNumber;$('pdf-page-label').textContent=pageLabel&&pageLabel!==String(pageNumber)?`PDF 第 ${pageNumber} 页 · 书内页码 ${pageLabel}`:`PDF 第 ${pageNumber} 页`;
   updateSource();updateOutline(pageNumber);scheduleProgress();scheduleFit();
@@ -240,7 +240,7 @@ function renderMessage(m){
   const head=document.createElement('div');head.className='message-head';head.textContent=m.role==='user'?'你 · 提问':'理读 · 解答';el.append(head);
   const c=m.context||{};
   if(c.page){const source=document.createElement('button');source.className='message-source';source.innerHTML=`PDF 第 ${c.page} 页${c.rect?' · 所选公式 / 图示':''}${c.selection?`<span class="source-quote">${esc(c.selection)}</span>`:''}`;source.onclick=()=>jump(c.page);el.append(source);}
-  if(c.image){const img=document.createElement('img');img.className='context-image';img.src='attachments/'+c.image;img.alt='提问时引用的 PDF 图片';el.append(img);}
+  for(const name of new Set([c.image,...(c.images||[])].filter(Boolean))){const img=document.createElement('img');img.className='context-image';img.src='attachments/'+name;img.alt=name===c.image?'提问时引用的 PDF 图片':'提问时粘贴的图片';el.append(img);}
   const body=document.createElement('div');body.className='message-body';
   if(m.role==='user')body.textContent=m.content;else body.append(mathMarkdown(m.content|| (m.status==='streaming'?'正在思考…':'')));
   el.append(body);
@@ -259,9 +259,46 @@ function renderSessions(){
   $('session-select').replaceChildren();for(const s of state.book.sessions){const option=new Option(s.title,s.id);$('session-select').add(option);}$('session-select').value=state.session;
 }
 function saveDraft(){if(state.session)localStorage.setItem('draft:'+state.session,$('question').value);}
+const imageDrafts=new Map();
+let pasteQueue=Promise.resolve(),pastePending=0;
+function pastedImages(){return imageDrafts.get(state.session)||[];}
+function renderPastedImages(){
+  const area=$('pasted-images');area.replaceChildren();const images=pastedImages();area.hidden=!images.length;
+  for(const item of images){
+    const card=document.createElement('div');card.className='pasted-image';
+    const img=document.createElement('img');img.src=item.data;img.alt='待发送图片';
+    const remove=document.createElement('button');remove.type='button';remove.className='remove-image';remove.textContent='×';remove.title='移除此图片';remove.setAttribute('aria-label','移除此图片');
+    remove.onclick=()=>{imageDrafts.set(state.session,pastedImages().filter(i=>i.id!==item.id));renderPastedImages();$('question').focus();};
+    card.append(img,remove);area.append(card);
+  }
+  if(images.length){const hint=document.createElement('span');hint.className='pasted-hint';hint.textContent=`待发送 ${images.length}/4 · 需图片模型`;area.append(hint);}
+}
+async function clipboardImage(file){
+  if(file.size>32*1024*1024)throw Error('图片过大，请缩小截图后粘贴');
+  const bitmap=await createImageBitmap(file);
+  try{
+    const scale=Math.min(1,2000/bitmap.width,2000/bitmap.height);const canvas=document.createElement('canvas');
+    canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+    canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);return canvas.toDataURL('image/png');
+  }finally{bitmap.close();}
+}
+bind('question','paste',event=>{
+  const files=Array.from(event.clipboardData?.items||[]).filter(item=>item.kind==='file'&&item.type.startsWith('image/')).map(item=>item.getAsFile()).filter(Boolean);
+  if(!files.length)return;event.preventDefault();const sid=state.session;if(!sid)return;
+  const text=event.clipboardData.getData('text/plain');if(text){const q=$('question');q.setRangeText(text,q.selectionStart,q.selectionEnd,'end');saveDraft();}
+  ++pastePending;
+  pasteQueue=pasteQueue.then(async()=>{
+    const existing=imageDrafts.get(sid)||[];if(existing.length+files.length>4)throw Error('每条问题最多粘贴 4 张图片，可先移除不需要的图片');
+    const added=[];for(const file of files)added.push({id:crypto.randomUUID(),data:await clipboardImage(file)});
+    // Existing drafts may have been removed while decoding the clipboard image.
+    const current=imageDrafts.get(sid)||[];
+    if([...current,...added].reduce((sum,item)=>sum+(item.data.length-22)*.75,0)>8*1024*1024)throw Error('粘贴图片总大小不能超过 8MB，请缩小图片后重试');
+    imageDrafts.set(sid,[...current,...added]);if(sid===state.session)renderPastedImages();
+  }).catch(error=>toast(error.message||'图片无法读取，请重新截图后粘贴')).finally(()=>--pastePending);
+});
 async function loadMessages(){
   if(!state.session)return;const sid=state.session;const data=await api('messages?session='+sid);if(sid!==state.session)return;
-  state.messageRows=data.messages;renderMessages();$('question').value=localStorage.getItem('draft:'+sid)||'';
+  state.messageRows=data.messages;renderMessages();renderPastedImages();$('question').value=localStorage.getItem('draft:'+sid)||'';
   if(data.active)trackJob(data.active);else setBusy(false);
 }
 function setBusy(busy){$('send-question').disabled=busy;$('stop-answer').hidden=!busy;if(!busy){state.job=null;$('chat-status').textContent='';}}
@@ -289,12 +326,18 @@ bind('export-session','click',async()=>{if(window.pywebview?.api){if(await windo
 bind('question','input',saveDraft);
 bind('question','keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();if(!$('send-question').disabled)$('ask-form').requestSubmit();}});
 bind('ask-form','submit',async e=>{
-  e.preventDefault();const question=$('question').value.trim();if(!question)return;
+  e.preventDefault();if(pastePending){toast('正在读取剪贴板图片，请稍候再发送');return;}
+  const images=[...pastedImages()],typed=$('question').value.trim();const question=typed||(images.length?'请解释图片中的内容，结合当前阅读上下文说明。':'');if(!question)return;
   if(!activeProfile()?.hasKey){openSettings();toast('请先配置模型，也可导入刊读现有配置');return;}
-  if((state.selected?.rect||$('attach-page').checked)&&!activeProfile().vision){openSettings();toast('图片提问需要支持图片的模型');return;}
-  const payload={sessionId:state.session,question,page:state.selected?.page||currentPage(),selection:state.selected?.text||'',rect:state.selected?.rect||null,attachImage:$('attach-page').checked};
+  if((state.selected?.rect||$('attach-page').checked||images.length)&&!activeProfile().vision){openSettings();toast('图片提问需要支持图片的模型');return;}
+  const payload={sessionId:state.session,question,page:state.selected?.page||currentPage(),selection:state.selected?.text||'',rect:state.selected?.rect||null,attachImage:$('attach-page').checked,images:images.map(i=>i.data)};
   $('send-question').disabled=true;
-  try{await api('ask',payload);$('question').value='';saveDraft();setContext(null);$('attach-page').checked=false;await loadMessages();}catch(error){setBusy(false);throw error;}
+  try{
+    await api('ask',payload);const sent=new Set(images.map(i=>i.id));imageDrafts.set(payload.sessionId,(imageDrafts.get(payload.sessionId)||[]).filter(i=>!sent.has(i.id)));
+    if(state.session!==payload.sessionId)return;
+    if($('question').value.trim()===typed){$('question').value='';saveDraft();}
+    renderPastedImages();setContext(null);$('attach-page').checked=false;await loadMessages();
+  }catch(error){if(state.session===payload.sessionId)setBusy(false);throw error;}
 });
 bind('stop-answer','click',async()=>{if(state.job){await api('cancel',{id:state.job.id});$('chat-status').textContent='正在停止，部分回答会保留…';}});
 

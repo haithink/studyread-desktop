@@ -6,6 +6,7 @@ import threading
 import requests
 
 from .config import data_dir
+from .attachments import image_names
 
 
 class ModelError(Exception):
@@ -28,20 +29,20 @@ def payload(profile, system, messages):
     anthropic = profile.get('provider') == 'anthropic'
     out = []
     for m in messages:
-        image = m.get('image')
+        images = image_names(m)
         content = m['text']
-        if image:
+        if images:
             if not profile.get('vision'):
                 raise ModelError('当前模型未启用图片能力，请在设置中选择支持图片的模型')
-            if image != __import__('pathlib').Path(image).name:
-                raise ModelError('图片路径无效')
-            b64 = base64.b64encode((data_dir() / 'attachments' / image).read_bytes()).decode('ascii')
-            if anthropic:
-                content = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64}},
-                           {'type': 'text', 'text': m['text']}]
-            else:
-                content = [{'type': 'text', 'text': m['text']},
-                           {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + b64}}]
+            blocks = []
+            for image in images:
+                if image != __import__('pathlib').Path(image).name:
+                    raise ModelError('图片路径无效')
+                b64 = base64.b64encode((data_dir() / 'attachments' / image).read_bytes()).decode('ascii')
+                blocks.append({'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64}}
+                              if anthropic else {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + b64}})
+            text = {'type': 'text', 'text': m['text']}
+            content = blocks + [text] if anthropic else [text] + blocks
         out.append({'role': m['role'], 'content': content})
     body = {'model': profile['model'], 'messages': out, 'stream': True, 'max_tokens': 8000}
     if anthropic:

@@ -20,7 +20,7 @@ async function main(){
  const temporary=http.createServer();await new Promise(r=>temporary.listen(0,'127.0.0.1',r));const port=temporary.address().port;await new Promise(r=>temporary.close(r));
  const sample=process.env.STUDYREAD_SAMPLE_PDF;
  assert.ok(sample,'Set STUDYREAD_SAMPLE_PDF to a real PDF for release verification');
- const exe=path.join(root,'dist/v0.1.0/StudyRead/StudyRead.exe');
+ const exe=path.join(root,`dist/v${require('../package.json').version}/StudyRead/StudyRead.exe`);
  const child=spawn(exe,[sample],{cwd:path.dirname(exe),windowsHide:true,stdio:'ignore',env:{...process.env,STUDYREAD_DATA_DIR:dir,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port='+port}});
  let page;
  try{
@@ -34,11 +34,15 @@ async function main(){
   await until(()=>page.evaluate("!!document.querySelector('.page[data-page-number=\"24\"] canvas')&&document.querySelector('.page[data-page-number=\"24\"] .textLayer')?.textContent.length>50"),'packaged original PDF page');
   assert.equal(await page.evaluate("window.studyread.mathMarkdown('$$F=ma$$').querySelectorAll('.katex').length"),1);
   await until(()=>page.evaluate("(()=>{const v=window.studyread.viewer,p=v.getPageView(23),w=document.getElementById('pdf-container').clientWidth;return v.currentPageNumber===24&&p.div.offsetWidth<=w&&p.div.offsetWidth>w-65})()"),'mixed-size PDF fit width');
+  await page.evaluate("(async()=>{const c=document.createElement('canvas');c.width=180;c.height=80;const ctx=c.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,180,80);ctx.fillStyle='black';ctx.font='24px serif';ctx.fillText('F = ma',20,50);const blob=await new Promise(r=>c.toBlob(r,'image/png'));const dt=new DataTransfer();dt.items.add(new File([blob],'formula.png',{type:'image/png'}));document.getElementById('question').dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));})()");
+  await until(()=>page.evaluate("document.querySelectorAll('#pasted-images img').length===1"),'native clipboard image handler and preview');
+  await page.evaluate("document.querySelector('#pasted-images .remove-image').click()");
+  assert.equal(await page.evaluate("document.getElementById('pasted-images').hidden"),true);
   assert.deepEqual(page.errors,[]);
   await mkdir(path.join(root,'_test_artifacts'),{recursive:true});
   const shot=await page.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
   await writeFile(path.join(root,'_test_artifacts/packaged-reader.png'),Buffer.from(shot.data,'base64'));
-  console.log('PACKAGED PASS: real WebView2, 739-page book, chapter navigation, PDF canvas, selectable text, math and native bridge');
+  console.log('PACKAGED PASS: WebView2, 739-page book, fit width, math, clipboard image preview/removal and native bridge');
  } finally{
   page?.close();child.kill();await pause(1000);
   await rm(dir,{recursive:true,force:true,maxRetries:20,retryDelay:250});

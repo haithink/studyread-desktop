@@ -3,6 +3,7 @@ import time
 import uuid
 
 from . import config, context, llm, store
+from .attachments import decode_images, image_names, save_images
 
 
 class ChatService:
@@ -14,18 +15,23 @@ class ChatService:
         with self.lock:
             return next((j for j in self.jobs.values() if j['session'] == session_id and j['status'] == 'streaming'), None)
 
-    def ask(self, session_id, question, page, selection='', rect=None, attach_image=False):
+    def ask(self, session_id, question, page, selection='', rect=None, attach_image=False, images=None):
         with self.lock:
             if self.active(session_id):
                 raise ValueError('此会话正在回答，请等待完成或先停止')
             question = str(question).strip()
+            if not question and images:
+                question = '请解释图片中的内容，结合当前阅读上下文说明。'
             if not question or len(question) > 12000:
                 raise ValueError('请输入问题，最多 12000 字')
             profile = dict(config.profile())
-            if (attach_image or rect) and not profile.get('vision'):
+            if (attach_image or rect or images) and not profile.get('vision'):
                 raise ValueError('公式和图示截图需要支持图片的模型，请在模型设置中启用图片能力；文字问题可直接发送')
+            pasted = decode_images(images)
             session = store.session(session_id)
             ctx = context.extract(session['book_id'], page, selection, rect, bool(attach_image or rect))
+            if pasted:
+                ctx['images'] = save_images(pasted)
             store.add_message(session_id, 'user', question, ctx)
             if len(store.messages(session_id)) == 1:
                 store.rename_session(session_id, question[:36])
@@ -42,7 +48,7 @@ class ChatService:
                 raise ValueError('回答已完成，请继续追问')
             profile = dict(config.profile())
             prior = rows[-2] if len(rows) > 1 else None
-            if prior and prior['context'].get('image') and not profile.get('vision'):
+            if prior and image_names(prior['context']) and not profile.get('vision'):
                 raise ValueError('这条问题含图片，请选择支持图片的模型')
             return self._start(session_id, profile, message_id)
 

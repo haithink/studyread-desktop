@@ -12,6 +12,7 @@ import zipfile
 
 from . import __version__, config, store
 from .chat import ChatService
+from .attachments import image_names
 
 
 def export_zip(session_id):
@@ -19,11 +20,11 @@ def export_zip(session_id):
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
         archive.writestr('conversation.md', store.export_session(session_id))
         for message in store.messages(session_id):
-            name = message['context'].get('image')
-            if name and Path(name).name == name:
-                source = config.data_dir() / 'attachments' / name
-                if source.is_file():
-                    archive.write(source, 'attachments/' + name)
+            for name in image_names(message['context']):
+                if Path(name).name == name:
+                    source = config.data_dir() / 'attachments' / name
+                    if source.is_file():
+                        archive.write(source, 'attachments/' + name)
     return output.getvalue()
 
 
@@ -91,7 +92,7 @@ class ApplicationServer:
                 return {'ok': True}
             if path == 'ask':
                 return self.chat.ask(data['sessionId'], data['question'], data['page'],
-                                     data.get('selection', ''), data.get('rect'), data.get('attachImage', False))
+                                     data.get('selection', ''), data.get('rect'), data.get('attachImage', False), data.get('images'))
             if path == 'retry':
                 return self.chat.retry(data['sessionId'], data['messageId'])
             if path == 'cancel':
@@ -175,7 +176,8 @@ class ApplicationServer:
                                 temporary.unlink(missing_ok=True)
                         self.reply(result)
                         return
-                    if length > 1024 * 1024:
+                    limit = 12 * 1024 * 1024 if relative == 'api/ask' else 1024 * 1024
+                    if not 0 <= length <= limit:
                         raise ValueError('请求内容过大')
                     data = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
                 else:
